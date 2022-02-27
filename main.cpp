@@ -202,42 +202,6 @@ struct Renderer
             }
         }
         ImGui::End();
-
-        ImGui::Begin("Multicast");
-        if (ImGui::BeginListBox("Chat"))
-        {
-            for (const auto &msg : context.multicastMessages)
-            {
-                ImGui::BeginGroup();
-                ImGui::TextColored(ImVec4{0.5, 0.5, 0.0, 1.0}, "%s", msg.time.c_str());
-                ImGui::SameLine();
-                if (msg.is_outgoing)
-                {
-                    ImGui::TextColored(ImVec4{1.0, 0.0, 0.0, 1.0}, "%s", msg.sender.c_str());
-                }
-                else
-                {
-                    ImGui::TextColored(ImVec4{0.0, 0.5, 0.0, 1.0}, "%s", msg.sender.c_str());
-                }
-
-                ImGui::SameLine();
-                ImGui::TextWrapped("%s", msg.message.c_str());
-                ImGui::EndGroup();
-            }
-            ImGui::EndListBox();
-        }
-        ImGui::InputTextWithHint("Input", "Message...", context.multicastChat, 1024);
-        ImGui::SameLine();
-        if (ImGui::Button("Send"))
-        {
-            const auto text = std::string{context.multicastChat};
-            if (!text.empty())
-            {
-                Protocol::send(context.inet, text, "224.1.1.1");
-                context.multicastChat[0] = 0;
-            }
-        }
-        ImGui::End();
     }
 };
 
