@@ -9,6 +9,12 @@
 
 #include <pthread.h>
 #include <optional>
+#include <set>
+
+// helper type for the visitor #4
+template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
+// explicit deduction guide (not needed as of C++20)
+template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
 
 struct Message
 {
@@ -17,6 +23,21 @@ struct Message
     std::string message;
 
     bool is_outgoing;
+};
+
+struct Client
+{
+    std::string address;
+    std::string network;
+
+    bool operator!=(const Client& cl) const {
+        return cl.address != address;
+    }
+
+    bool operator==(const Client& cl) const {
+        return cl.address == address;
+    }
+
 };
 
 struct GlobalContext
@@ -28,6 +49,8 @@ struct GlobalContext
     char broadcastChat[1024]{};
     std::vector<Message> broadcastMessages{};
     std::vector<Message> multicastMessages{};
+    std::set<Client, std::equal_to<>> clients{};
+    std::set<std::string> blacklist{};
 
     std::string selectedAddress{interfaces[0].broadcast};
 
@@ -35,7 +58,6 @@ struct GlobalContext
 
     char multicastControlField[17]{};
     Error multicastControlError{};
-    char multicastChat[1024]{};
 };
 
 struct Renderer
@@ -74,9 +96,14 @@ struct Renderer
                 ImGui::SameLine();
                 auto isSelected = context.selectedAddress == in.broadcast;
                 ImGui::BeginDisabled(isSelected);
-                if (ImGui::SmallButton(isSelected ? "Selected" : "Select"))
+                if (ImGui::SmallButton(isSelected ? "Selected" : (std::string{"Select "} + in.name).c_str()))
                 {
-                    context.selectedAddress = in.broadcast;
+                    printf("select interface %s\n", in.name.c_str());
+                    if (context.selectedAddress != in.broadcast)
+                    {
+                        context.selectedAddress = in.broadcast;
+                        Protocol::discover(context.inet, in.broadcast);
+                    }
                 }
                 ImGui::EndDisabled();
                 ImGui::Text("IPv4 %s", in.ipv4.c_str());
@@ -98,9 +125,13 @@ struct Renderer
                 ImGui::SameLine();
                 auto isSelected = context.selectedAddress == in;
                 ImGui::BeginDisabled(isSelected);
-                if (ImGui::SmallButton(isSelected ? "Selected" : "Select"))
+                if (ImGui::SmallButton(isSelected ? "Selected" : (std::string{"Select "} + in).c_str()))
                 {
-                    context.selectedAddress = in;
+                    if (context.selectedAddress != in)
+                    {
+                        context.selectedAddress = in;
+                        Protocol::discover(context.inet, in);
+                    }
                 }
                 ImGui::EndDisabled();
                 ImGui::Separator();
@@ -202,6 +233,52 @@ struct Renderer
             }
         }
         ImGui::End();
+
+        ImGui::Begin("Clients");
+        if (ImGui::BeginListBox("Clients"))
+        {
+            for (const auto& in : context.clients)
+            {
+                ImGui::BeginGroup();
+                ImGui::Text("%s", in.address.c_str());
+                ImGui::SameLine();
+                const auto it = context.blacklist.find(in.address);
+                if (it == context.blacklist.end())
+                {
+                    if (ImGui::SmallButton((std::string{"Ignore "} + in.address).c_str()))
+                    {
+                        context.blacklist.insert(in.address);
+                    }
+                }
+                else
+                {
+                    if (ImGui::SmallButton((std::string{"Un-ignore "} + in.address).c_str()))
+                    {
+                        context.blacklist.erase(it);
+                    }
+                }
+                ImGui::Text("via %s", in.network.c_str());
+                ImGui::Separator();
+                ImGui::EndGroup();
+            }
+            ImGui::EndListBox();
+        }
+        if (ImGui::SmallButton("Discover new clients"))
+        {
+            Protocol::discover(context.inet, context.selectedAddress);
+        }
+        if (ImGui::BeginListBox("Blacklist"))
+        {
+            for (const auto& in : context.blacklist)
+            {
+                ImGui::BeginGroup();
+                ImGui::Text("%s", in.c_str());
+                ImGui::Separator();
+                ImGui::EndGroup();
+            }
+            ImGui::EndListBox();
+        }
+        ImGui::End();
     }
 };
 
@@ -211,13 +288,53 @@ void threadHandler(const std::shared_ptr<GlobalContext>& context)
     while (!context->isTerminated)
     {
         const auto message = Protocol::recv(context->inet, buffer, sizeof(buffer));
+
+        const auto source = std::visit(overloaded {
+            [](const HelloMessage& hello) {
+                return hello.source;
+            },
+            [](const TextMessage& text) {
+                return text.source;
+            },
+            [](const DiscoverMessage& discover) {
+                return discover.source;
+            }
+        }, message);
+
         const auto isOutgoing = [&context](const auto x) -> bool {
             const auto it = std::find_if(std::begin(context->interfaces), std::end(context->interfaces), [&x](const auto y) {
                 return y.ipv4 == x;
             });
             return it != std::end(context->interfaces);
-        }(utils::addr_to_string(message.source));
-        context->broadcastMessages.push_back(Message{utils::addr_to_string(message.source), message.time, message.payload, isOutgoing});
+        }(utils::addr_to_string(source));
+
+        std::visit(overloaded {
+                [isOutgoing, &context](const HelloMessage& hello) {
+                    if (!isOutgoing)
+                    {
+                        context->clients.insert(Client{utils::addr_to_string(hello.source), hello.payload});
+                    }
+                },
+                [isOutgoing, &context](const TextMessage& text) {
+                    const auto sender = utils::addr_to_string(text.source);
+                    const auto it = context->blacklist.find(sender);
+                    if (it == context->blacklist.end())
+                    {
+                        context->broadcastMessages.push_back(Message{sender, text.time, text.payload, isOutgoing});
+                    }
+                    else
+                    {
+                        printf("ignore message from %s: %s\n", sender.c_str(), text.payload.c_str());
+                    }
+                },
+                [isOutgoing, &context](const DiscoverMessage& discover) {
+                    if (!isOutgoing)
+                    {
+                        printf("hello to %s\n", utils::addr_to_string(discover.source).c_str());
+                        Protocol::hello(context->inet, discover.source, discover.payload);
+                    }
+                }
+        }, message);
     }
 }
 
