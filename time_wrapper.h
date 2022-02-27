@@ -7,13 +7,27 @@
 
 #include <chrono>
 #include <sstream>
+#include <sstream>
+#include <ctime>
 
 struct Time {
-    const std::chrono::system_clock::time_point point;
+
+    typedef std::chrono::system_clock Clock;
+    typedef Clock::time_point TimePoint;
+
+    const TimePoint point;
     const std::string str;
 
-    explicit Time(): point(std::chrono::system_clock::now()), str{"time"}
+    explicit Time(): point(Clock::now()), str{Time::time(point)}
     {
+    }
+
+    static std::string time(Time::TimePoint point)
+    {
+        const auto t = Clock::to_time_t(point);
+        char buffer[16]{};
+        std::strftime(buffer, sizeof(buffer), "%H:%M", localtime(&t));
+        return std::string{buffer};
     }
 };
 
