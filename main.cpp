@@ -28,14 +28,10 @@ struct Message
 struct Client
 {
     std::string address;
-    std::string network;
+    std::set<std::string> networks;
 
-    bool operator!=(const Client& cl) const {
-        return cl.address != address;
-    }
-
-    bool operator==(const Client& cl) const {
-        return cl.address == address;
+    bool operator<(const Client& cl) const {
+        return cl.address < address;
     }
 
 };
@@ -49,7 +45,7 @@ struct GlobalContext
     char broadcastChat[1024]{};
     std::vector<Message> broadcastMessages{};
     std::vector<Message> multicastMessages{};
-    std::set<Client, std::equal_to<>> clients{};
+    std::set<Client> clients{};
     std::set<std::string> blacklist{};
 
     std::string selectedAddress{interfaces[0].broadcast};
@@ -154,7 +150,7 @@ struct Renderer
         ImGui::Text("Selected address %s", context.selectedAddress.c_str());
         ImGui::End();
 
-        ImGui::Begin("Broadcast");
+        ImGui::Begin("Telegram");
         if (ImGui::BeginListBox("Chat"))
         {
             for (const auto &msg : context.broadcastMessages)
@@ -257,7 +253,11 @@ struct Renderer
                         context.blacklist.erase(it);
                     }
                 }
-                ImGui::Text("via %s", in.network.c_str());
+                for (int i = 0; const auto& net : in.networks)
+                {
+                    ImGui::Text(i == 0 ? "via %s" : "    %s", net.c_str());
+                    i++;
+                }
                 ImGui::Separator();
                 ImGui::EndGroup();
             }
@@ -312,7 +312,21 @@ void threadHandler(const std::shared_ptr<GlobalContext>& context)
                 [isOutgoing, &context](const HelloMessage& hello) {
                     if (!isOutgoing)
                     {
-                        context->clients.insert(Client{utils::addr_to_string(hello.source), hello.payload});
+                        const auto sender = utils::addr_to_string(hello.source);
+                        auto it = std::find_if(std::begin(context->clients), std::end(context->clients), [&sender](const auto& c) -> bool {
+                            return c.address == sender;
+                        });
+                        if (it == context->clients.end())
+                        {
+                            context->clients.insert(Client{sender, {hello.payload}});
+                        }
+                        else
+                        {
+                            std::set<std::string> s{it->networks};
+                            s.insert(hello.payload);
+                            context->clients.erase(it);
+                            context->clients.insert(Client{sender, s});
+                        }
                     }
                 },
                 [isOutgoing, &context](const TextMessage& text) {
