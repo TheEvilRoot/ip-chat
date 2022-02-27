@@ -12,7 +12,7 @@
 
 struct Error
 {
-    errno_t code;
+    std::decay_t<decltype(errno)> code;
     std::string place;
     std::string description{strerror(code)};
 
