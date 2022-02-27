@@ -32,6 +32,14 @@ struct Socket
         {
             error = Error("socket");
         }
+        else
+        {
+            int broadcast = 1;
+            if (setsockopt(handle, SOL_SOCKET, SO_BROADCAST, static_cast<const void*>(&broadcast), sizeof(broadcast)) != 0)
+            {
+                error = Error("setsockopt(SO_BROADCAST)");
+            }
+        }
     }
 
     auto sendto(const char* buffer, const std::size_t buffer_size, int flags, const sockaddr_in& addr)
